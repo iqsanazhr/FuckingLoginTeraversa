@@ -7,6 +7,7 @@ Arsitektur Keamanan: Zero-Knowledge E2EE (4-Digit Personal PIN)
 import re
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.request import HTTPXRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -865,23 +866,44 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.effective_message.reply_text("❌ Akun Anda belum terhubung. Ketik /login terlebih dahulu.")
         return
 
+    # 1. Cek apakah user menyertakan PIN 4-digit di caption foto (misal: caption "1234")
+    # Hapus pesan berisi PIN SEGERA demi keamanan dan privasi
+    caption = update.message.caption.strip() if update.message.caption else ""
+    pin = None
+    if len(caption) == 4 and caption.isdigit():
+        pin = caption
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
     progress = await update.effective_chat.send_message("🔍 <b>Memindai QR Code dari gambar... [BETA]</b>", parse_mode="HTML")
 
     try:
+        decoded_text = ""
         # Dukung pengiriman foto biasa maupun dokumen gambar
         if update.message.photo:
-            photo = update.message.photo[-1]
-            photo_file = await photo.get_file()
+            photos = update.message.photo
+            # Pilih ukuran foto optimal (jika banyak ukuran, gunakan yang cukup tajam tanpa terlalu berat)
+            target_photo = photos[-2] if len(photos) >= 3 else photos[-1]
+            photo_file = await target_photo.get_file(read_timeout=60.0, connect_timeout=30.0)
+            img_bytes = await photo_file.download_as_bytearray(read_timeout=60.0, connect_timeout=30.0)
+            decoded_text = scan_qr_from_bytes(bytes(img_bytes))
+
+            # Jika belum terdeteksi dan ada foto resolusi lebih tinggi, fallback ke resolusi maksimal
+            if not decoded_text and len(photos) >= 3:
+                max_photo = photos[-1]
+                max_file = await max_photo.get_file(read_timeout=60.0, connect_timeout=30.0)
+                max_bytes = await max_file.download_as_bytearray(read_timeout=60.0, connect_timeout=30.0)
+                decoded_text = scan_qr_from_bytes(bytes(max_bytes))
+
         elif update.message.document:
-            photo_file = await update.message.document.get_file()
+            photo_file = await update.message.document.get_file(read_timeout=60.0, connect_timeout=30.0)
+            img_bytes = await photo_file.download_as_bytearray(read_timeout=60.0, connect_timeout=30.0)
+            decoded_text = scan_qr_from_bytes(bytes(img_bytes))
         else:
             await progress.edit_text("⚠️ Format gambar tidak didukung.")
             return
-
-        img_bytes = await photo_file.download_as_bytearray()
-
-        # Pindai dengan Computer Vision OpenCV
-        decoded_text = scan_qr_from_bytes(bytes(img_bytes))
 
         if not decoded_text:
             await progress.edit_text(
@@ -891,16 +913,6 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 parse_mode="HTML"
             )
             return
-
-        # Cek apakah user menyertakan PIN 4-digit di caption foto (misal: caption "1234")
-        caption = update.message.caption.strip() if update.message.caption else ""
-        pin = None
-        if len(caption) == 4 and caption.isdigit():
-            pin = caption
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
 
         if user.password_salt and not pin:
             PENDING_FLOW[telegram_id] = {
@@ -982,7 +994,13 @@ def build_application() -> Application:
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN belum diset di .env!")
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    request = HTTPXRequest(
+        connection_pool_size=20,
+        connect_timeout=30.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+    )
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
 
     # Conversation Handler untuk /login
     login_conv = ConversationHandler(
