@@ -301,3 +301,78 @@ class UnsoedClient:
             alias = meaningful_words[0][:3].upper()
 
         return alias
+
+    def get_attendance_summary(self) -> list[dict]:
+        """
+        Mengambil rekap kehadiran mahasiswa dari https://teraversa.unsoed.ac.id/mobile/rekaphispresensi
+        Output: list of { 'nim': str, 'course_name': str, 'count_text': str, 'detail_url': str }
+        """
+        try:
+            resp = self.session.get("https://teraversa.unsoed.ac.id/mobile/rekaphispresensi", timeout=15)
+            if resp.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            table = soup.find("table")
+            if not table:
+                return []
+
+            results = []
+            rows = table.find_all("tr")
+            for r in rows:
+                cols = r.find_all("td")
+                if len(cols) >= 3:
+                    nim = cols[0].get_text(strip=True)
+                    course_name = cols[1].get_text(strip=True)
+                    count_text = cols[2].get_text(strip=True)
+
+                    a_tag = cols[2].find("a")
+                    detail_url = a_tag.get("href") if a_tag else ""
+                    if detail_url and not detail_url.startswith("http"):
+                        detail_url = f"https://teraversa.unsoed.ac.id{detail_url}"
+
+                    results.append({
+                        "nim": nim,
+                        "course_name": course_name,
+                        "count_text": count_text,
+                        "detail_url": detail_url
+                    })
+            return results
+        except Exception as e:
+            return []
+
+    def get_attendance_history(self, detail_url: str) -> list[dict]:
+        """
+        Mengambil riwayat presensi tiap pertemuan dari URL detail hispresensi
+        Output: list of { 'pert': str, 'course_name': str, 'status': str, 'waktu': str }
+        """
+        try:
+            if not detail_url:
+                return []
+            resp = self.session.get(detail_url, timeout=15)
+            if resp.status_code != 200:
+                return []
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            table = soup.find("table")
+            if not table:
+                return []
+
+            results = []
+            rows = table.find_all("tr")
+            for r in rows:
+                cols = r.find_all("td")
+                if len(cols) >= 4:
+                    pert = cols[0].get_text(strip=True)
+                    cname = cols[1].get_text(strip=True)
+                    status = cols[2].get_text(strip=True)
+                    waktu = cols[3].get_text(strip=True)
+                    results.append({
+                        "pert": pert,
+                        "course_name": cname,
+                        "status": status,
+                        "waktu": waktu
+                    })
+            return results
+        except Exception as e:
+            return []

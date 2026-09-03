@@ -32,9 +32,13 @@ WATERMARK = "<i>dev: nctreap_</i>"
 # State untuk ConversationHandler Login
 EMAIL_STATE, PASSWORD_STATE, PIN_STATE = range(3)
 
-# Temporary context cache untuk pending OTP per user
-# user_id -> {'idjadwal': str, 'step': 'token'|'pin', 'token': str}
+# Temporary context cache untuk pending flow per user
+# user_id -> {'action': str, ...}
 PENDING_FLOW = {}
+
+# Cache sesi rekap kehadiran Teraversa
+# user_id -> {'client': UnsoedClient, 'summary': list, 'user_name': str}
+REKAP_CACHE = {}
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,6 +53,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🛡️ Keamanan: <b>Zero-Knowledge E2EE (PIN 4-Digit)</b>\n\n"
             f"<b>Fitur Bot:</b>\n"
             f"• /matkul - Lihat jadwal mata kuliah & tombol presensi\n"
+            f"• /logpresensi - Rekap kehadiran kuliah & riwayat per pertemuan\n"
             f"• /refresh - Perbarui daftar mata kuliah dari Unsoed\n"
             f"• /status - Cek status akun Anda\n"
             f"• /logout - Putuskan kaitan akun & reset PIN\n"
@@ -61,10 +66,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
             [
+                InlineKeyboardButton("📊 Rekap Kehadiran", callback_data="btn_logpresensi"),
                 InlineKeyboardButton("🔄 Refresh Data", callback_data="btn_refresh"),
-                InlineKeyboardButton("🚪 Logout Akun", callback_data="btn_logout_confirm"),
             ],
-            [InlineKeyboardButton("📖 Panduan & Bantuan", callback_data="btn_help")],
+            [
+                InlineKeyboardButton("📖 Panduan", callback_data="btn_help"),
+                InlineKeyboardButton("🚪 Logout", callback_data="btn_logout_confirm"),
+            ],
         ]
     else:
         text = (
@@ -207,7 +215,8 @@ async def login_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Email: <code>{email}</code>\n"
             f"• Keamanan: <b>Zero-Knowledge E2EE (PIN 4-Digit Aktif)</b>\n"
             f"• Mata Kuliah Dimuat: <b>{len(courses)}</b> matkul\n\n"
-            f"📚 Ketik /matkul untuk melihat jadwal & tombol presensi langsung.\n\n"
+            f"📚 Ketik /matkul untuk melihat jadwal & tombol presensi langsung.\n"
+            f"📊 Ketik /logpresensi untuk melihat rekap kehadiran kuliah.\n\n"
             f"💡 <b>Cara Presensi Cepat di Kelas:</b>\n"
             f"Ketik: <code>KODEMATKUL [TOKEN] [PIN]</code>\n"
             f"Contoh: <code>ERP 123456 {pin}</code>\n\n"
@@ -316,6 +325,111 @@ async def _execute_refresh(update: Update, user, pin: str = None):
     await msg.edit_text(f"✅ Berhasil memperbarui <b>{len(courses_data)}</b> mata kuliah!", parse_mode="HTML")
 
 
+# --- Log & Rekap Presensi (/logpresensi & /rekap) ---
+async def logpresensi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+
+    if not user:
+        await update.effective_message.reply_text("❌ Akun Anda belum terhubung. Ketik /login terlebih dahulu.")
+        return
+
+    # Jika PIN dikirim langsung di argumen: /logpresensi 1234
+    pin = None
+    if context.args and len(context.args) == 1 and len(context.args[0]) == 4 and context.args[0].isdigit():
+        pin = context.args[0]
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        await _execute_logpresensi(update, user, pin=pin)
+        return
+
+    # Jika butuh PIN tapi belum ada
+    if user.password_salt:
+        PENDING_FLOW[telegram_id] = {"action": "logpresensi"}
+        await update.effective_message.reply_text(
+            "🔐 Masukkan <b>PIN 4-digit</b> Anda untuk membuka rekap presensi:\n"
+            "<i>(Pesan PIN akan langsung dihapus otomatis)</i>\n\n"
+            "💡 <i>Tips: Anda juga bisa ketik langsung <code>/logpresensi [PIN]</code></i>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Fallback jika akun lama
+    await _execute_logpresensi(update, user)
+
+
+async def _execute_logpresensi(update: Update, user, pin: str = None):
+    msg = await update.effective_chat.send_message("⏳ Mengambil rekap presensi dari Teraversa...")
+    try:
+        plain_password = user.get_password(pin=pin)
+    except ValueError as e:
+        keyboard = [
+            [InlineKeyboardButton("🚪 Lupa PIN? Logout & Reset", callback_data="btn_logout_confirm")]
+        ]
+        await msg.edit_text(
+            f"❌ <b>Otorisasi Gagal!</b>\n{e}\n\n"
+            f"<i>💡 Lupa PIN? Klik tombol di bawah untuk Logout dan membuat PIN baru.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return
+
+    client = UnsoedClient()
+    logged_in, user_name, err = client.login(user.email, plain_password)
+    del plain_password
+    if pin:
+        del pin
+
+    if not logged_in:
+        await msg.edit_text(f"❌ Gagal login ke SSO Unsoed: {err}")
+        return
+
+    summary = client.get_attendance_summary()
+    if not summary:
+        await msg.edit_text("📭 Tidak ditemukan data rekap presensi di akun Anda saat ini.")
+        return
+
+    # Simpan ke REKAP_CACHE untuk membuka detail via tombol
+    u_name = user_name or user.full_name or "Mahasiswa"
+    REKAP_CACHE[user.telegram_id] = {
+        "client": client,
+        "summary": summary,
+        "user_name": u_name
+    }
+
+    await _render_rekap_message(msg, user.telegram_id, summary, u_name)
+
+
+async def _render_rekap_message(message_or_query, telegram_id: int, summary: list, user_name: str):
+    text = (
+        f"📊 <b>REKAP PRESENSI KULIAH (TERAVERSA)</b>\n"
+        f"👤 Mahasiswa: <b>{user_name}</b>\n\n"
+    )
+
+    keyboard = []
+    for idx, item in enumerate(summary):
+        cname = item["course_name"]
+        count_str = item["count_text"]
+        text += f"• <b>{cname}</b>\n  └ Kehadiran: <b>{count_str}</b>\n\n"
+        btn_label = f"📋 Rincian: {cname[:20]}"
+        keyboard.append([InlineKeyboardButton(btn_label, callback_data=f"rek_{idx}")])
+
+    text += (
+        "💡 <i>Klik tombol mata kuliah di atas untuk melihat rincian riwayat tiap pertemuan (status & waktu).</i>\n\n"
+        f"{WATERMARK}"
+    )
+
+    keyboard.append([InlineKeyboardButton("🔄 Segarkan Rekap", callback_data="btn_rekap_refresh")])
+
+    markup = InlineKeyboardMarkup(keyboard)
+    if hasattr(message_or_query, "edit_text"):
+        await message_or_query.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    elif hasattr(message_or_query, "edit_message_text"):
+        await message_or_query.edit_message_text(text, reply_markup=markup, parse_mode="HTML")
+
+
 # --- Logout Handlers ---
 async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_id = update.effective_user.id
@@ -349,6 +463,7 @@ async def logout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "confirm_logout_yes":
         success = db.delete_user(telegram_id)
         PENDING_FLOW.pop(telegram_id, None)
+        REKAP_CACHE.pop(telegram_id, None)
         if success:
             await query.edit_message_text(
                 "🚪 <b>Logout Berhasil (PIN Lama Dihapus)!</b>\n\n"
@@ -377,14 +492,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Ketik /matkul\n"
         "• Klik tombol mata kuliah yang sedang berlangsung\n"
         "• Kirimkan format: <code>[TOKEN] [PIN]</code> (contoh: <code>123456 1234</code>)\n\n"
-        "<b>3. Lupa PIN 4-Digit? (Cara Reset PIN)</b>\n"
+        "<b>3. Melihat Rekap Kehadiran Kuliah</b>\n"
+        "• Ketik /logpresensi (atau /rekap)\n"
+        "• Bot akan menampilkan jumlah kehadiran (misal: 1 Pertemuan dari 2)\n"
+        "• Klik tombol mata kuliah untuk melihat detail jam & tanggal setiap pertemuan.\n\n"
+        "<b>4. Lupa PIN 4-Digit? (Cara Reset PIN)</b>\n"
         "Karena sistem menggunakan <b>Zero-Knowledge E2EE</b>, server tidak mengetahui PIN Anda. "
         "Jika Anda lupa PIN, Anda bisa membuat PIN baru dengan sangat mudah:\n"
         "1. Ketik /logout (seluruh kredensial & PIN lama otomatis dihapus bersih)\n"
         "2. Ketik /login untuk mengaitkan akun kembali dan membuat <b>PIN 4-digit baru</b>!\n\n"
-        "<b>4. Daftar Perintah Bot:</b>\n"
+        "<b>5. Daftar Perintah Bot:</b>\n"
         "• /start - Menu utama\n"
         "• /matkul - Daftar mata kuliah & tombol presensi\n"
+        "• /logpresensi - Rekap kehadiran & riwayat per pertemuan\n"
         "• /refresh - Sinkronkan mata kuliah terbaru dari portal kampus\n"
         "• /status - Cek status profil & enkripsi akun\n"
         "• /logout - Putuskan kaitan akun & hapus PIN lama\n"
@@ -393,6 +513,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     keyboard = [
         [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
+        [InlineKeyboardButton("📊 Rekap Kehadiran", callback_data="btn_logpresensi")],
         [InlineKeyboardButton("🚪 Logout & Reset PIN", callback_data="btn_logout_confirm")],
     ]
     await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -408,12 +529,56 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "btn_matkul":
         await matkul_command(update, context)
+    elif data == "btn_logpresensi":
+        await logpresensi_command(update, context)
     elif data == "btn_refresh":
         await refresh_command(update, context)
     elif data == "btn_logout_confirm":
         await logout_command(update, context)
     elif data == "btn_help":
         await help_command(update, context)
+    elif data == "btn_rekap_refresh":
+        await logpresensi_command(update, context)
+    elif data == "btn_rekap_back":
+        cache = REKAP_CACHE.get(telegram_id)
+        if cache:
+            await _render_rekap_message(query, telegram_id, cache["summary"], cache["user_name"])
+        else:
+            await query.edit_message_text("Sesi kedaluwarsa. Ketik /logpresensi untuk membuka kembali.")
+    elif data.startswith("rek_"):
+        idx = int(data.replace("rek_", ""))
+        cache = REKAP_CACHE.get(telegram_id)
+        if not cache or idx >= len(cache["summary"]):
+            await query.answer("Sesi rekap telah kedaluwarsa. Ketik /logpresensi untuk memuat ulang.", show_alert=True)
+            return
+
+        item = cache["summary"][idx]
+        client = cache["client"]
+        
+        await query.edit_message_text(f"⏳ Mengambil riwayat pertemuan untuk <b>{item['course_name']}</b>...", parse_mode="HTML")
+        history = client.get_attendance_history(item["detail_url"])
+
+        detail_text = (
+            f"📋 <b>RIWAYAT PRESENSI KULIAH</b>\n"
+            f"Mata Kuliah: <b>{item['course_name']}</b>\n"
+            f"Total Kehadiran: <b>{item['count_text']}</b>\n\n"
+        )
+
+        if not history:
+            detail_text += "<i>Belum ada data riwayat pertemuan yang terekam pada mata kuliah ini di Teraversa.</i>\n\n"
+        else:
+            for h in history:
+                status_icon = "✅" if "hadir" in h["status"].lower() else "ℹ️"
+                detail_text += (
+                    f"• <b>Pertemuan {h['pert']}</b>: {status_icon} <code>{h['status'].upper()}</code>\n"
+                    f"  └ Waktu: <i>{h['waktu']}</i>\n\n"
+                )
+
+        detail_text += f"{WATERMARK}"
+        back_keyboard = [
+            [InlineKeyboardButton("🔙 Kembali ke Daftar Rekap", callback_data="btn_rekap_back")]
+        ]
+        await query.edit_message_text(detail_text, reply_markup=InlineKeyboardMarkup(back_keyboard), parse_mode="HTML")
     elif data.startswith("otp_"):
         idjadwal = data.replace("otp_", "")
         course = db.find_course(telegram_id, idjadwal)
@@ -437,6 +602,17 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     user = db.get_user(telegram_id)
 
     if not user:
+        return
+
+    # Skenario 0: Pending Rekap / Logpresensi dengan input PIN
+    if telegram_id in PENDING_FLOW and PENDING_FLOW[telegram_id].get("action") == "logpresensi":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        pin = text
+        PENDING_FLOW.pop(telegram_id, None)
+        await _execute_logpresensi(update, user, pin=pin)
         return
 
     # Skenario 1: Pending Refresh dengan input PIN
@@ -625,6 +801,7 @@ def build_application() -> Application:
     # Registrasi Handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("matkul", matkul_command))
+    app.add_handler(CommandHandler(["logpresensi", "rekap"], logpresensi_command))
     app.add_handler(CommandHandler("refresh", refresh_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("logout", logout_command))
