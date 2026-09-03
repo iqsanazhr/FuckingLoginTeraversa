@@ -44,7 +44,8 @@ It enables students to submit 6-digit lecture attendance OTP tokens in real-time
 | `/matkul` | View active registered courses with schedules and 1-click attendance buttons |
 | `/refresh` | Synchronize course cache directly from the live UNSOED portal |
 | `/status` | Check encryption health, student profile, and registered course count |
-| `/logout` | Unlink account and permanently purge all stored credentials and cache |
+| `/logout` | Unlink account, purge credentials, and reset forgotten 4-digit PIN |
+| `/bantuan` or `/help` | Comprehensive usage guide, fast syntax examples, and PIN reset guide |
 
 ---
 

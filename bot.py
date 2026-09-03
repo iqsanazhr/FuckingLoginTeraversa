@@ -51,7 +51,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• /matkul - Lihat jadwal mata kuliah & tombol presensi\n"
             f"• /refresh - Perbarui daftar mata kuliah dari Unsoed\n"
             f"• /status - Cek status akun Anda\n"
-            f"• /logout - Putuskan kaitan akun\n\n"
+            f"• /logout - Putuskan kaitan akun & reset PIN\n"
+            f"• /bantuan - Panduan lengkap & cara reset PIN jika lupa\n\n"
             f"💡 <b>Cara Cepat Isi Presensi:</b>\n"
             f"Langsung ketik: <code>KODEMATKUL [TOKEN] [PIN]</code>\n"
             f"Contoh: <code>ERP 123456 9988</code> atau <code>UKPL 654321 1234</code>\n\n"
@@ -63,6 +64,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🔄 Refresh Data", callback_data="btn_refresh"),
                 InlineKeyboardButton("🚪 Logout Akun", callback_data="btn_logout_confirm"),
             ],
+            [InlineKeyboardButton("📖 Panduan & Bantuan", callback_data="btn_help")],
         ]
     else:
         text = (
@@ -213,7 +215,8 @@ async def login_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{WATERMARK}"
         )
         keyboard = [
-            [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")]
+            [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
+            [InlineKeyboardButton("🚪 Logout & Reset PIN", callback_data="btn_logout_confirm")],
         ]
         del pin
         await progress_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -329,9 +332,10 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     await update.effective_message.reply_text(
-        f"⚠️ <b>Konfirmasi Logout:</b>\n\n"
+        f"⚠️ <b>Konfirmasi Logout & Reset PIN:</b>\n\n"
         f"Apakah Anda yakin ingin memutuskan kaitan akun <b>{user.email}</b>?\n"
-        f"Semua kredensial terenkripsi dan cache mata kuliah akan dihapus permanen.",
+        f"Semua kredensial terenkripsi, PIN lama, dan cache mata kuliah akan dihapus permanen.\n\n"
+        f"<i>💡 Jika Anda lupa PIN, Anda bisa klik tombol 'Ya' di bawah, lalu ketik /login untuk membuat PIN baru!</i>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
@@ -347,15 +351,51 @@ async def logout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         PENDING_FLOW.pop(telegram_id, None)
         if success:
             await query.edit_message_text(
-                "🚪 <b>Logout Berhasil!</b>\n\n"
-                "Semua data kredensial terenkripsi dan mata kuliah Anda telah dihapus permanen dari server.\n"
-                "Ketik /login kapan saja jika ingin menghubungkan kembali.",
+                "🚪 <b>Logout Berhasil (PIN Lama Dihapus)!</b>\n\n"
+                "Semua data kredensial terenkripsi dan PIN lama Anda telah dihapus permanen dari server.\n"
+                "Ketik /login kapan saja jika ingin menghubungkan kembali dan membuat PIN 4-digit baru!",
                 parse_mode="HTML",
             )
         else:
             await query.edit_message_text("ℹ️ Akun Anda sudah tidak ada di database.")
     elif query.data == "confirm_logout_no":
         await query.edit_message_text("✅ Logout dibatalkan. Akun Anda tetap terhubung.")
+
+
+# --- Bantuan & Panduan Handler (/bantuan & /help) ---
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📖 <b>PANDUAN LENGKAP PENGGUNAAN BOT</b>\n\n"
+        "<b>1. Cara Presensi Cepat di Kelas</b>\n"
+        "Saat dosen menampilkan kode token di proyektor, langsung kirim pesan:\n"
+        "<code>KODEMATKUL [TOKEN] [PIN]</code>\n\n"
+        "<i>Contoh:</i>\n"
+        "• <code>ERP 123456 1234</code>\n"
+        "• <code>KRIPTO 654321 9988</code>\n"
+        "• <code>UKPL 789012 1234</code>\n\n"
+        "<b>2. Cara Presensi Tombol Interaktif</b>\n"
+        "• Ketik /matkul\n"
+        "• Klik tombol mata kuliah yang sedang berlangsung\n"
+        "• Kirimkan format: <code>[TOKEN] [PIN]</code> (contoh: <code>123456 1234</code>)\n\n"
+        "<b>3. Lupa PIN 4-Digit? (Cara Reset PIN)</b>\n"
+        "Karena sistem menggunakan <b>Zero-Knowledge E2EE</b>, server tidak mengetahui PIN Anda. "
+        "Jika Anda lupa PIN, Anda bisa membuat PIN baru dengan sangat mudah:\n"
+        "1. Ketik /logout (seluruh kredensial & PIN lama otomatis dihapus bersih)\n"
+        "2. Ketik /login untuk mengaitkan akun kembali dan membuat <b>PIN 4-digit baru</b>!\n\n"
+        "<b>4. Daftar Perintah Bot:</b>\n"
+        "• /start - Menu utama\n"
+        "• /matkul - Daftar mata kuliah & tombol presensi\n"
+        "• /refresh - Sinkronkan mata kuliah terbaru dari portal kampus\n"
+        "• /status - Cek status profil & enkripsi akun\n"
+        "• /logout - Putuskan kaitan akun & hapus PIN lama\n"
+        "• /bantuan - Tampilkan panduan ini\n\n"
+        f"{WATERMARK}"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
+        [InlineKeyboardButton("🚪 Logout & Reset PIN", callback_data="btn_logout_confirm")],
+    ]
+    await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 
 # --- Callback Query Handler (Tombol Menu & Matkul) ---
@@ -372,6 +412,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await refresh_command(update, context)
     elif data == "btn_logout_confirm":
         await logout_command(update, context)
+    elif data == "btn_help":
+        await help_command(update, context)
     elif data.startswith("otp_"):
         idjadwal = data.replace("otp_", "")
         course = db.find_course(telegram_id, idjadwal)
@@ -501,9 +543,14 @@ async def _process_attendance(update: Update, user, idjadwal: str, course_name: 
     try:
         plain_password = user.get_password(pin=pin)
     except ValueError as e:
+        keyboard = [
+            [InlineKeyboardButton("🚪 Lupa PIN? Logout & Reset", callback_data="btn_logout_confirm")]
+        ]
         await progress.edit_text(
             f"❌ <b>Otorisasi Gagal!</b>\n{e}\n\n"
-            f"Pastikan PIN 4-digit yang Anda masukkan benar.",
+            f"Pastikan PIN 4-digit yang Anda masukkan benar.\n\n"
+            f"<i>💡 Lupa PIN? Klik tombol di bawah untuk Logout dan membuat PIN baru dengan /login kembali.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
         return
@@ -581,6 +628,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("refresh", refresh_command))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("logout", logout_command))
+    app.add_handler(CommandHandler(["bantuan", "help"], help_command))
     app.add_handler(login_conv)
 
     # Callbacks untuk logout & menu inline
