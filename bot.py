@@ -205,14 +205,18 @@ async def login_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Email: <code>{email}</code>\n"
             f"• Keamanan: <b>Zero-Knowledge E2EE (PIN 4-Digit Aktif)</b>\n"
             f"• Mata Kuliah Dimuat: <b>{len(courses)}</b> matkul\n\n"
+            f"📚 Ketik /matkul untuk melihat jadwal & tombol presensi langsung.\n\n"
             f"💡 <b>Cara Presensi Cepat di Kelas:</b>\n"
             f"Ketik: <code>KODEMATKUL [TOKEN] [PIN]</code>\n"
             f"Contoh: <code>ERP 123456 {pin}</code>\n\n"
             f"<i>⚠️ Catatan: Ingat selalu PIN 4-digit Anda! Kunci enkripsi ini hanya Anda yang memegangnya.</i>\n\n"
             f"{WATERMARK}"
         )
+        keyboard = [
+            [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")]
+        ]
         del pin
-        await progress_msg.edit_text(text, parse_mode="HTML")
+        await progress_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error saat login_pin: {e}", exc_info=True)
         await progress_msg.edit_text(f"❌ Terjadi kesalahan saat memproses login: {e}")
