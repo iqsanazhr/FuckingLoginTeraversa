@@ -20,6 +20,7 @@ from telegram.ext import (
 from config import TELEGRAM_BOT_TOKEN
 import database as db
 from unsoed_client import UnsoedClient
+from qr_scanner import scan_qr_from_bytes
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -59,8 +60,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• /logout - Putuskan kaitan akun & reset PIN\n"
             f"• /bantuan - Panduan lengkap & cara reset PIN jika lupa\n\n"
             f"💡 <b>Cara Cepat Isi Presensi:</b>\n"
-            f"Langsung ketik: <code>KODEMATKUL [TOKEN] [PIN]</code>\n"
-            f"Contoh: <code>ERP 123456 9988</code> atau <code>UKPL 654321 1234</code>\n\n"
+            f"• <b>Format Teks:</b> <code>KODEMATKUL [TOKEN] [PIN]</code> (contoh: <code>ERP 123456 1234</code>)\n"
+            f"• 📸 <b>Foto QR Code [BETA]:</b> Kirim langsung foto QR code di kelas ke bot ini!\n\n"
             f"{WATERMARK}"
         )
         keyboard = [
@@ -615,6 +616,18 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _execute_logpresensi(update, user, pin=pin)
         return
 
+    # Skenario 0.5: Pending Presensi Scan QR dengan input PIN
+    if telegram_id in PENDING_FLOW and PENDING_FLOW[telegram_id].get("action") == "qr_attendance":
+        flow = PENDING_FLOW.pop(telegram_id)
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        pin = text
+        prog_msg = await update.effective_chat.send_message("⏳ Memproses otorisasi PIN & presensi QR...", parse_mode="HTML")
+        await _execute_qr_attendance(prog_msg, user, flow["decoded_text"], pin=pin)
+        return
+
     # Skenario 1: Pending Refresh dengan input PIN
     if telegram_id in PENDING_FLOW and PENDING_FLOW[telegram_id].get("action") == "refresh":
         try:
@@ -775,6 +788,128 @@ async def _process_attendance(update: Update, user, idjadwal: str, course_name: 
     await progress.edit_text(result_text, parse_mode="HTML")
 
 
+# --- QR Code Photo Handler (Presensi Foto QR - BETA) ---
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+
+    if not user:
+        await update.effective_message.reply_text("❌ Akun Anda belum terhubung. Ketik /login terlebih dahulu.")
+        return
+
+    progress = await update.effective_chat.send_message("🔍 <b>Memindai QR Code dari gambar... [BETA]</b>", parse_mode="HTML")
+
+    try:
+        # Dukung pengiriman foto biasa maupun dokumen gambar
+        if update.message.photo:
+            photo = update.message.photo[-1]
+            photo_file = await photo.get_file()
+        elif update.message.document:
+            photo_file = await update.message.document.get_file()
+        else:
+            await progress.edit_text("⚠️ Format gambar tidak didukung.")
+            return
+
+        img_bytes = await photo_file.download_as_bytearray()
+
+        # Pindai dengan Computer Vision OpenCV
+        decoded_text = scan_qr_from_bytes(bytes(img_bytes))
+
+        if not decoded_text:
+            await progress.edit_text(
+                "⚠️ <b>QR Code Tidak Terdeteksi! [BETA]</b>\n\n"
+                "Bot tidak menemukan kode QR pada gambar yang Anda kirim.\n"
+                "<i>Tips: Pastikan foto QR code cukup terang, fokus, dan tidak terlalu blur atau miring.</i>",
+                parse_mode="HTML"
+            )
+            return
+
+        # Cek apakah user menyertakan PIN 4-digit di caption foto (misal: caption "1234")
+        caption = update.message.caption.strip() if update.message.caption else ""
+        pin = None
+        if len(caption) == 4 and caption.isdigit():
+            pin = caption
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+
+        if user.password_salt and not pin:
+            PENDING_FLOW[telegram_id] = {
+                "action": "qr_attendance",
+                "decoded_text": decoded_text,
+            }
+            await progress.edit_text(
+                "📸 <b>Kode QR Berhasil Terdeteksi! [BETA]</b>\n\n"
+                "Silakan ketik <b>PIN 4-digit</b> Anda untuk otorisasi presensi:\n"
+                "<i>(Pesan PIN akan langsung dihapus otomatis)</i>\n\n"
+                "💡 <i>Tips: Lain kali Anda bisa langsung ketik PIN di keterangan/caption saat mengirim foto!</i>",
+                parse_mode="HTML"
+            )
+            return
+
+        await _execute_qr_attendance(progress, user, decoded_text, pin=pin)
+
+    except Exception as e:
+        logger.error(f"Error scan foto QR: {e}", exc_info=True)
+        await progress.edit_text(f"❌ Terjadi kesalahan saat memproses foto: {e}")
+
+
+async def _execute_qr_attendance(progress_msg, user, decoded_text: str, pin: str = None):
+    await progress_msg.edit_text("⏳ Sedang memverifikasi akun dan mengirim presensi QR ke Teraversa...", parse_mode="HTML")
+    try:
+        plain_password = user.get_password(pin=pin)
+    except ValueError as e:
+        keyboard = [
+            [InlineKeyboardButton("🚪 Lupa PIN? Logout & Reset", callback_data="btn_logout_confirm")]
+        ]
+        await progress_msg.edit_text(
+            f"❌ <b>Otorisasi Gagal!</b>\n{e}\n\n"
+            f"<i>💡 Lupa PIN? Klik tombol di bawah untuk Logout dan membuat PIN baru.</i>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+        return
+
+    client = UnsoedClient()
+    logged_in, _, err = client.login(user.email, plain_password)
+    del plain_password
+    if pin:
+        del pin
+
+    if not logged_in:
+        await progress_msg.edit_text(f"❌ Gagal login ke SSO Unsoed: {err}")
+        return
+
+    success, msg = client.submit_qr_attendance(decoded_text)
+
+    # Simpan log ke database
+    db.log_attendance(
+        telegram_id=user.telegram_id,
+        idjadwal="QR_SCAN",
+        course_name="Presensi Scan QR (BETA)",
+        token=decoded_text[:25],
+        status="BERHASIL" if success else "GAGAL",
+        message=msg,
+    )
+
+    if success:
+        result_text = (
+            f"🎉 <b>Presensi QR Berhasil! [BETA]</b>\n\n"
+            f"• Status: <b>Tercatat di Teraversa</b>\n"
+            f"ℹ️ Pesan Kampus: <i>{msg}</i>\n\n"
+            f"{WATERMARK}"
+        )
+    else:
+        result_text = (
+            f"⚠️ <b>Presensi QR Gagal! [BETA]</b>\n\n"
+            f"Pesan dari Teraversa:\n<i>{msg}</i>\n\n"
+            f"{WATERMARK}"
+        )
+
+    await progress_msg.edit_text(result_text, parse_mode="HTML")
+
+
 def build_application() -> Application:
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN belum diset di .env!")
@@ -811,6 +946,9 @@ def build_application() -> Application:
     # Callbacks untuk logout & menu inline
     app.add_handler(CallbackQueryHandler(logout_callback, pattern="^confirm_logout_"))
     app.add_handler(CallbackQueryHandler(handle_callback_query))
+
+    # Handler Foto / Gambar QR Code
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_photo_message))
 
     # Fallback text message untuk presensi cepat
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))

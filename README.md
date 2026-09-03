@@ -28,6 +28,8 @@ It enables students to submit 6-digit lecture attendance OTP tokens in real-time
 - **Interactive & Quick-Input Modes**:
   - **One-Click Inline Keyboard**: Browse active courses via `/matkul` and click the corresponding course button to trigger token submission.
   - **Fast Command Syntax**: Directly message `COURSE_CODE {token} {pin}` (e.g., `ERP 123456 9988`) for instant processing.
+  - **Computer Vision QR Code Scanning (BETA)**: Directly send or forward a photo of the lecture QR code displayed on the classroom projector. The bot auto-detects and decodes the QR hash using OpenCV and executes the attendance immediately.
+  - **Comprehensive Attendance Audit (`/logpresensi`)**: View aggregated course attendance counts (e.g., 1/2 meetings) and drill down into per-meeting timestamps with 1-click interactive modal buttons.
 - **Flexible Dual-Database Architecture**:
   - Cloud PostgreSQL on **Supabase** for persistent, scalable production deployment.
   - Automatic fallback to local **SQLite** (`attendance.db`) for rapid local development.

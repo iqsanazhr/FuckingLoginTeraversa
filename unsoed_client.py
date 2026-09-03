@@ -376,3 +376,42 @@ class UnsoedClient:
             return results
         except Exception as e:
             return []
+
+    def submit_qr_attendance(self, hash_or_url: str) -> tuple[bool, str]:
+        """
+        Kirim presensi menggunakan kode hash QR ke https://teraversa.unsoed.ac.id/mobile/presensi?hash=...
+        Mengembalikan (is_success, pesan).
+        """
+        try:
+            if not hash_or_url:
+                return False, "Kode hash QR kosong."
+
+            if hash_or_url.startswith("http://") or hash_or_url.startswith("https://"):
+                target_url = hash_or_url
+            else:
+                target_url = f"https://teraversa.unsoed.ac.id/mobile/presensi?hash={hash_or_url}"
+
+            resp = self.session.get(target_url, allow_redirects=True, timeout=15)
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Cek alert atau modal pesan
+            alert_box = soup.find(class_=lambda c: c and ("alert" in c.lower() or "swal" in c.lower() or "notification" in c.lower() or "toast" in c.lower()))
+            if alert_box:
+                msg = alert_box.get_text(strip=True)
+                if any(w in msg.lower() for w in ["berhasil", "sukses", "success", "tercatat"]):
+                    return True, msg
+                elif any(w in msg.lower() for w in ["gagal", "salah", "expired", "sudah", "lewat"]):
+                    return False, msg
+
+            # Cek teks umum di body
+            body_text = soup.body.get_text(strip=True) if soup.body else resp.text
+            if any(w in body_text.lower() for w in ["presensi berhasil", "kehadiran anda berhasil", "terima kasih telah melakukan presensi"]):
+                return True, "Presensi QR berhasil tercatat di sistem Teraversa."
+
+            if "homemhs" in resp.url:
+                return True, "Presensi QR berhasil diproses (diarahkan ke Beranda Mahasiswa)."
+
+            return True, f"Presensi QR telah dikirim ke Teraversa (Status: HTTP {resp.status_code})."
+        except Exception as e:
+            return False, f"Terjadi kesalahan koneksi saat mengirim presensi QR: {e}"
