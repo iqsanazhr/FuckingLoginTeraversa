@@ -393,6 +393,9 @@ class UnsoedClient:
 
             resp = self.session.get(target_url, allow_redirects=True, timeout=15)
 
+            if resp.status_code >= 400:
+                return False, f"Server Teraversa menolak kode QR (Status: HTTP {resp.status_code}). Kode QR tidak valid atau sesi presensi telah berakhir/kadaluarsa."
+
             soup = BeautifulSoup(resp.text, "html.parser")
 
             # Cek alert atau modal pesan
@@ -401,7 +404,7 @@ class UnsoedClient:
                 msg = alert_box.get_text(strip=True)
                 if any(w in msg.lower() for w in ["berhasil", "sukses", "success", "tercatat"]):
                     return True, msg
-                elif any(w in msg.lower() for w in ["gagal", "salah", "expired", "sudah", "lewat"]):
+                elif any(w in msg.lower() for w in ["gagal", "salah", "expired", "sudah", "lewat", "tidak valid"]):
                     return False, msg
 
             # Cek teks umum di body
@@ -409,9 +412,15 @@ class UnsoedClient:
             if any(w in body_text.lower() for w in ["presensi berhasil", "kehadiran anda berhasil", "terima kasih telah melakukan presensi"]):
                 return True, "Presensi QR berhasil tercatat di sistem Teraversa."
 
-            if "homemhs" in resp.url:
+            if any(w in body_text.lower() for w in ["gagal", "tidak valid", "sudah presensi", "kadaluarsa"]):
+                return False, f"Pesan Kampus: {body_text[:120]}"
+
+            if "homemhs" in resp.url and resp.status_code == 200:
                 return True, "Presensi QR berhasil diproses (diarahkan ke Beranda Mahasiswa)."
 
-            return True, f"Presensi QR telah dikirim ke Teraversa (Status: HTTP {resp.status_code})."
+            if resp.status_code == 200:
+                return True, "Presensi QR telah terkirim ke Teraversa (Status: HTTP 200 OK)."
+
+            return False, f"Presensi QR gagal (Status: HTTP {resp.status_code})."
         except Exception as e:
             return False, f"Terjadi kesalahan koneksi saat mengirim presensi QR: {e}"
