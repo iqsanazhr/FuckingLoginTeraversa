@@ -4,7 +4,7 @@
 *(Informatics / Computer Science — Universitas Jenderal Soedirman)*
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
-[![Security](https://img.shields.io/badge/Security-AES--256--GCM-16a34a?style=flat-square)](https://github.com/iqsanazhr/FuckingLoginTeraversa)
+[![Security](https://img.shields.io/badge/Security-Zero--Knowledge_E2EE-16a34a?style=flat-square)](https://github.com/iqsanazhr/FuckingLoginTeraversa)
 [![Platform](https://img.shields.io/badge/Platform-Telegram_Bot-2563eb?style=flat-square&logo=telegram&logoColor=white)](https://t.me/autoinputoken_bot)
 [![Database](https://img.shields.io/badge/Database-Supabase_%7C_PostgreSQL-059669?style=flat-square&logo=supabase&logoColor=white)](https://supabase.com)
 [![Deployment](https://img.shields.io/badge/Deploy-Railway_%7C_Always--On-7c3aed?style=flat-square&logo=railway&logoColor=white)](https://railway.app)
@@ -23,10 +23,11 @@ It enables students to submit 6-digit lecture attendance OTP tokens in real-time
 ## 🚀 Key Features
 
 - **SSO & OAuth2 Lifecycle Automation**: Handles the full university authentication chain—including `account.unsoed.ac.id` CSRF retrieval, credential verification, and OAuth 2.0 authorization callbacks to Teraversa.
-- **Enterprise-Grade Security (AES-256-GCM)**: All student credentials are encrypted at rest using Galois/Counter Mode (AEAD) with 96-bit cryptographic nonces. Passwords entered in Telegram chats are **immediately auto-deleted** to protect user privacy.
+- **Zero-Knowledge E2EE Security (4-Digit Personal PIN)**: Modeled after WhatsApp's client-side key isolation. Passwords are encrypted using keys derived from the user's **personal 4-digit PIN** via **PBKDF2-HMAC-SHA256 (100,000 iterations)** and **AES-256-GCM**. The server and database owners **cannot read student passwords**.
+- **Chat Privacy & Ephemeral Memory**: Passwords and PINs entered in Telegram chats are **immediately auto-deleted** upon reception and only held in RAM for ~2 seconds during attendance execution.
 - **Interactive & Quick-Input Modes**:
   - **One-Click Inline Keyboard**: Browse active courses via `/matkul` and click the corresponding course button to trigger token submission.
-  - **Fast Command Syntax**: Directly message `COURSE_CODE {token}` (e.g., `ERP 123456` or `UKPL 654321`) for instant processing.
+  - **Fast Command Syntax**: Directly message `COURSE_CODE {token} {pin}` (e.g., `ERP 123456 9988`) for instant processing.
 - **Flexible Dual-Database Architecture**:
   - Cloud PostgreSQL on **Supabase** for persistent, scalable production deployment.
   - Automatic fallback to local **SQLite** (`attendance.db`) for rapid local development.

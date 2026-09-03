@@ -2,7 +2,7 @@ from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, BigInteger, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from config import DATABASE_URL
-from security import encrypt_secret, decrypt_secret
+from security import encrypt_secret, decrypt_secret, encrypt_with_pin, decrypt_with_pin
 
 Base = declarative_base()
 
@@ -12,17 +12,33 @@ class User(Base):
     telegram_id = Column(BigInteger, primary_key=True)
     email = Column(String(255), nullable=False)
     encrypted_password = Column(Text, nullable=False)
+    password_salt = Column(String(50), nullable=True)  # Salt unik 128-bit untuk derivasi PIN
     full_name = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     courses = relationship("CourseCache", back_populates="user", cascade="all, delete-orphan")
 
-    def get_password(self) -> str:
+    def get_password(self, pin: str = None) -> str:
+        """
+        Buka password akun Unsoed.
+        Jika akun menggunakan Zero-Knowledge E2EE, wajib menyertakan PIN 4-digit.
+        """
+        if self.password_salt:
+            if not pin:
+                raise ValueError("PIN 4-digit diperlukan untuk membuka password!")
+            return decrypt_with_pin(self.encrypted_password, self.password_salt, pin)
+        # Fallback master key jika akun lama belum memakai PIN
         return decrypt_secret(self.encrypted_password)
 
-    def set_password(self, plain_password: str):
-        self.encrypted_password = encrypt_secret(plain_password)
+    def set_password(self, plain_password: str, pin: str = None):
+        if pin:
+            enc, salt = encrypt_with_pin(plain_password, pin)
+            self.encrypted_password = enc
+            self.password_salt = salt
+        else:
+            self.encrypted_password = encrypt_secret(plain_password)
+            self.password_salt = None
 
 
 class CourseCache(Base):
@@ -59,6 +75,18 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Migrasi otomatis kolom password_salt jika belum ada
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_salt VARCHAR(50);"))
+            conn.commit()
+        except Exception:
+            try:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_salt VARCHAR(50);"))
+                conn.commit()
+            except Exception:
+                pass
     print("[*] Database tables initialized successfully.")
 
 
@@ -67,20 +95,28 @@ def get_user(telegram_id: int):
         return db.query(User).filter(User.telegram_id == telegram_id).first()
 
 
-def save_user(telegram_id: int, email: str, password_plain: str, full_name: str = None) -> User:
+def save_user(telegram_id: int, email: str, password_plain: str, pin: str = None, full_name: str = None) -> User:
     with SessionLocal() as db:
         user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if pin:
+            enc_pwd, salt = encrypt_with_pin(password_plain, pin)
+        else:
+            enc_pwd = encrypt_secret(password_plain)
+            salt = None
+
         if not user:
             user = User(
                 telegram_id=telegram_id,
                 email=email,
-                encrypted_password=encrypt_secret(password_plain),
+                encrypted_password=enc_pwd,
+                password_salt=salt,
                 full_name=full_name,
             )
             db.add(user)
         else:
             user.email = email
-            user.encrypted_password = encrypt_secret(password_plain)
+            user.encrypted_password = enc_pwd
+            user.password_salt = salt
             if full_name:
                 user.full_name = full_name
             user.updated_at = datetime.utcnow()
