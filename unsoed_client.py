@@ -40,16 +40,20 @@ class UnsoedClient:
             # 3. Kirim kredensial
             login_url = "https://account.unsoed.ac.id/login"
             self.session.headers.update({"Referer": resp.url})
+            payload = {
+                "_token": csrf_token,
+                "login": email,
+                "password": password,
+            }
             resp_login = self.session.post(
                 login_url,
-                data={
-                    "_token": csrf_token,
-                    "login": email,
-                    "password": password,
-                },
+                data=payload,
                 allow_redirects=True,
                 timeout=15,
             )
+            # Hapus data password seketika dari memori proses
+            del payload
+            del password
 
             # Cek jika kredensial salah
             if "account.unsoed.ac.id/login" in resp_login.url:

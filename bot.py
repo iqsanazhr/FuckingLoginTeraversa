@@ -190,8 +190,10 @@ async def login_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Simpan ke Database dengan Zero-Knowledge PIN E2EE
     db.save_user(telegram_id=telegram_id, email=email, password_plain=password, pin=pin, full_name=full_name)
 
-    # Bersihkan password dari context RAM
+    # Hapus paksa password dan PIN dari RAM seketika
     context.user_data.pop("login_password", None)
+    del password
+    del pin
 
     # Ambil dan simpan daftar mata kuliah
     courses = client.get_courses()
@@ -291,6 +293,9 @@ async def _execute_refresh(update: Update, user, pin: str = None):
         return
 
     success, full_name, err = client.login(user.email, pwd)
+    del pwd
+    if pin:
+        del pin
     if not success:
         await msg.edit_text(f"❌ Gagal login ke Unsoed saat refresh: {err}")
         return
@@ -495,9 +500,12 @@ async def _process_attendance(update: Update, user, idjadwal: str, course_name: 
         )
         return
 
-    client = UnsoedClient()
-    # Login dulu untuk mendapatkan session cookies aktif
     logged_in, _, err = client.login(user.email, plain_password)
+    # Hapus paksa password dan PIN dari RAM seketika
+    del plain_password
+    if pin:
+        del pin
+
     if not logged_in:
         await progress.edit_text(f"❌ Gagal login ke SSO Unsoed: {err}")
         return
