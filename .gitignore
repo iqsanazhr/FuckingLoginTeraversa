@@ -1,0 +1,32 @@
+# Environment & Secrets (SANGAT PENTING: JANGAN DI-PUSH KE GITHUB)
+.env
+.env.local
+.env.*.local
+
+# Database & Storage
+*.db
+*.sqlite
+*.sqlite3
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE & Editor Configs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
