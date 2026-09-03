@@ -54,6 +54,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🛡️ Keamanan: <b>Zero-Knowledge E2EE (PIN 4-Digit)</b>\n\n"
             f"<b>Fitur Bot:</b>\n"
             f"• /matkul - Lihat jadwal mata kuliah & tombol presensi\n"
+            f"• /qrpresensi - Presensi via Scan Foto QR Code [BETA]\n"
             f"• /logpresensi - Rekap kehadiran kuliah & riwayat per pertemuan\n"
             f"• /refresh - Perbarui daftar mata kuliah dari Unsoed\n"
             f"• /status - Cek status akun Anda\n"
@@ -67,10 +68,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
             [
+                InlineKeyboardButton("📸 Presensi QR", callback_data="btn_qrpresensi"),
                 InlineKeyboardButton("📊 Rekap Kehadiran", callback_data="btn_logpresensi"),
-                InlineKeyboardButton("🔄 Refresh Data", callback_data="btn_refresh"),
             ],
             [
+                InlineKeyboardButton("🔄 Refresh", callback_data="btn_refresh"),
                 InlineKeyboardButton("📖 Panduan", callback_data="btn_help"),
                 InlineKeyboardButton("🚪 Logout", callback_data="btn_logout_confirm"),
             ],
@@ -478,11 +480,67 @@ async def logout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Logout dibatalkan. Akun Anda tetap terhubung.")
 
 
+# --- Presensi Scan QR Code Command (/qrpresensi & /qr & /scan) ---
+async def qrpresensi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_id = update.effective_user.id
+    user = db.get_user(telegram_id)
+
+    if not user:
+        keyboard = [[InlineKeyboardButton("🔗 Hubungkan Akun Sekarang", callback_data="btn_login_start")]]
+        await update.effective_message.reply_text(
+            "❌ Anda belum menghubungkan akun Unsoed. Silakan /login terlebih dahulu.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    args = context.args
+    # Jika user mengirim format langsung: /qrpresensi [hash_atau_url] [pin]
+    if args and len(args) >= 1:
+        raw_target = args[0]
+        pin = args[1] if len(args) >= 2 else None
+
+        if user.password_salt and not pin:
+            PENDING_FLOW[telegram_id] = {
+                "action": "qr_attendance",
+                "decoded_text": raw_target,
+            }
+            await update.effective_message.reply_text(
+                "📸 <b>Presensi QR Code [BETA]</b>\n\n"
+                "Kode hash/link terdeteksi. Silakan ketik <b>PIN 4-digit</b> Anda untuk otorisasi:\n"
+                "<i>(Pesan PIN akan langsung dihapus otomatis)</i>",
+                parse_mode="HTML"
+            )
+            return
+
+        prog = await update.effective_message.reply_text("⏳ Sedang memproses presensi QR...")
+        await _execute_qr_attendance(prog, user, raw_target, pin=pin)
+        return
+
+    # Jika hanya mengetik /qrpresensi tanpa argumen
+    PENDING_FLOW[telegram_id] = {"action": "wait_qr_photo"}
+    text = (
+        f"📸 <b>Presensi Scan QR Code [BETA]</b>\n\n"
+        f"Untuk presensi QR Code, Anda <b>tidak perlu memilih nama matkul</b> karena ID mata kuliah sudah tersimpan otomatis di dalam QR Code dosen.\n\n"
+        f"<b>Cara Pakai:</b>\n"
+        f"1️⃣ Langsung <b>kirim / teruskan foto QR Code</b> dari proyektor kelas ke bot ini.\n"
+        f"2️⃣ <i>(Tips Cepat)</i> Tuliskan <b>PIN 4-digit</b> Anda di keterangan/caption foto agar presensi langsung terkirim seketika!\n\n"
+        f"Atau jika Anda memiliki link / kode hash presensi:\n"
+        f"Ketik: <code>/qrpresensi [LINK_ATAU_HASH] [PIN]</code>\n\n"
+        f"<i>Silakan kirimkan foto QR Code Anda sekarang...</i>\n\n"
+        f"{WATERMARK}"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
+        [InlineKeyboardButton("📊 Rekap Kehadiran", callback_data="btn_logpresensi")],
+    ]
+    await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+
 # --- Bantuan & Panduan Handler (/bantuan & /help) ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 <b>PANDUAN LENGKAP PENGGUNAAN BOT</b>\n\n"
-        "<b>1. Cara Presensi Cepat di Kelas</b>\n"
+        "<b>1. Cara Presensi Cepat di Kelas (Token Teks)</b>\n"
         "Saat dosen menampilkan kode token di proyektor, langsung kirim pesan:\n"
         "<code>KODEMATKUL [TOKEN] [PIN]</code>\n\n"
         "<i>Contoh:</i>\n"
@@ -493,18 +551,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Ketik /matkul\n"
         "• Klik tombol mata kuliah yang sedang berlangsung\n"
         "• Kirimkan format: <code>[TOKEN] [PIN]</code> (contoh: <code>123456 1234</code>)\n\n"
-        "<b>3. Melihat Rekap Kehadiran Kuliah</b>\n"
+        "<b>3. Cara Presensi Scan Foto QR Code [BETA]</b>\n"
+        "• <b>Tidak perlu pilih matkul!</b> Cukup kirim/teruskan foto QR Code kuliah ke bot ini.\n"
+        "• Tuliskan PIN 4-digit Anda di caption foto agar presensi langsung dieksekusi detik itu juga.\n"
+        "• Atau gunakan perintah: <code>/qrpresensi [LINK/HASH] [PIN]</code>\n\n"
+        "<b>4. Melihat Rekap Kehadiran Kuliah</b>\n"
         "• Ketik /logpresensi (atau /rekap)\n"
         "• Bot akan menampilkan jumlah kehadiran (misal: 1 Pertemuan dari 2)\n"
         "• Klik tombol mata kuliah untuk melihat detail jam & tanggal setiap pertemuan.\n\n"
-        "<b>4. Lupa PIN 4-Digit? (Cara Reset PIN)</b>\n"
+        "<b>5. Lupa PIN 4-Digit? (Cara Reset PIN)</b>\n"
         "Karena sistem menggunakan <b>Zero-Knowledge E2EE</b>, server tidak mengetahui PIN Anda. "
         "Jika Anda lupa PIN, Anda bisa membuat PIN baru dengan sangat mudah:\n"
         "1. Ketik /logout (seluruh kredensial & PIN lama otomatis dihapus bersih)\n"
         "2. Ketik /login untuk mengaitkan akun kembali dan membuat <b>PIN 4-digit baru</b>!\n\n"
-        "<b>5. Daftar Perintah Bot:</b>\n"
+        "<b>6. Daftar Perintah Bot:</b>\n"
         "• /start - Menu utama\n"
         "• /matkul - Daftar mata kuliah & tombol presensi\n"
+        "• /qrpresensi - Panduan & kirim link/foto presensi QR Code [BETA]\n"
         "• /logpresensi - Rekap kehadiran & riwayat per pertemuan\n"
         "• /refresh - Sinkronkan mata kuliah terbaru dari portal kampus\n"
         "• /status - Cek status profil & enkripsi akun\n"
@@ -514,7 +577,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     keyboard = [
         [InlineKeyboardButton("📚 Lihat Mata Kuliah", callback_data="btn_matkul")],
-        [InlineKeyboardButton("📊 Rekap Kehadiran", callback_data="btn_logpresensi")],
+        [
+            InlineKeyboardButton("📸 Presensi QR", callback_data="btn_qrpresensi"),
+            InlineKeyboardButton("📊 Rekap Kehadiran", callback_data="btn_logpresensi"),
+        ],
         [InlineKeyboardButton("🚪 Logout & Reset PIN", callback_data="btn_logout_confirm")],
     ]
     await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -530,6 +596,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "btn_matkul":
         await matkul_command(update, context)
+    elif data == "btn_qrpresensi":
+        await qrpresensi_command(update, context)
     elif data == "btn_logpresensi":
         await logpresensi_command(update, context)
     elif data == "btn_refresh":
@@ -936,6 +1004,7 @@ def build_application() -> Application:
     # Registrasi Handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("matkul", matkul_command))
+    app.add_handler(CommandHandler(["qrpresensi", "qr", "scan"], qrpresensi_command))
     app.add_handler(CommandHandler(["logpresensi", "rekap"], logpresensi_command))
     app.add_handler(CommandHandler("refresh", refresh_command))
     app.add_handler(CommandHandler("status", status_command))

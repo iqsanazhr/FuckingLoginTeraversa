@@ -44,6 +44,7 @@ It enables students to submit 6-digit lecture attendance OTP tokens in real-time
 | `/start` | Welcome screen, account status, and quick action buttons |
 | `/login` or `/link` | Secure interactive login flow to link UNSOED student credentials |
 | `/matkul` | View active registered courses with schedules and 1-click attendance buttons |
+| `/qrpresensi` or `/qr` | Guide & direct submission for QR Code lecture attendance (BETA) |
 | `/logpresensi` or `/rekap` | View attendance summary (e.g. 1/2 meetings) & inspect detailed meeting timestamps |
 | `/refresh` | Synchronize course cache directly from the live UNSOED portal |
 | `/status` | Check encryption health, student profile, and registered course count |
