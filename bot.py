@@ -500,6 +500,7 @@ async def _process_attendance(update: Update, user, idjadwal: str, course_name: 
         )
         return
 
+    client = UnsoedClient()
     logged_in, _, err = client.login(user.email, plain_password)
     # Hapus paksa password dan PIN dari RAM seketika
     del plain_password
