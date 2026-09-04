@@ -1,7 +1,7 @@
 import re
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urljoin
 
 class UnsoedClient:
     def __init__(self):
@@ -64,21 +64,67 @@ class UnsoedClient:
                 return False, "", err_msg
 
             # 4. Handle halaman otorisasi OAuth (jika ada tombol Izinkan / Consent)
-            if "oauth/authorize" in resp_login.url:
-                soup_oauth = BeautifulSoup(resp_login.text, "html.parser")
-                approve_form = soup_oauth.find("form")
+            for _ in range(2):
+                if "oauth/authorize" in resp_login.url:
+                    soup_oauth = BeautifulSoup(resp_login.text, "html.parser")
+                    forms = soup_oauth.find_all("form")
+                    approve_form = None
+                    for f in forms:
+                        btn_text = f.get_text().lower()
+                        if any(w in btn_text for w in ["izinkan", "approve", "setuju", "authorize"]):
+                            approve_form = f
+                            break
+                    if not approve_form and forms:
+                        approve_form = forms[0]
+
+                    if approve_form:
+                        action = approve_form.get("action") or resp_login.url
+                        action_url = urljoin(resp_login.url, action)
+                        form_data = {
+                            inp.get("name"): inp.get("value", "")
+                            for inp in approve_form.find_all("input")
+                            if inp.get("name")
+                        }
+                        # Ambil button submit untuk persetujuan (bukan cancel / batal / deny)
+                        for btn in approve_form.find_all("button"):
+                            name = btn.get("name")
+                            txt = btn.get_text().lower()
+                            if name and not any(w in (name.lower() + txt) for w in ["batal", "deny", "cancel", "tolak"]):
+                                form_data[name] = btn.get("value", "1")
+                                break
+
+                        self.session.headers.update({"Referer": resp_login.url})
+                        resp_login = self.session.post(action_url, data=form_data, allow_redirects=True, timeout=15)
+                    else:
+                        break
+                else:
+                    break
+
+            # 5. Buka Home Teraversa untuk verifikasi dan ambil nama mahasiswa
+            resp_home = self.session.get("https://teraversa.unsoed.ac.id/mobile/homemhs", timeout=15)
+            if "oauth/authorize" in resp_home.url:
+                soup_oauth = BeautifulSoup(resp_home.text, "html.parser")
+                forms = soup_oauth.find_all("form")
+                approve_form = forms[0] if forms else None
                 if approve_form:
-                    action = approve_form.get("action", resp_login.url)
+                    action = approve_form.get("action") or resp_home.url
+                    action_url = urljoin(resp_home.url, action)
                     form_data = {
                         inp.get("name"): inp.get("value", "")
                         for inp in approve_form.find_all("input")
                         if inp.get("name")
                     }
-                    self.session.headers.update({"Referer": resp_login.url})
-                    resp_login = self.session.post(action, data=form_data, allow_redirects=True, timeout=15)
+                    for btn in approve_form.find_all("button"):
+                        name = btn.get("name")
+                        txt = btn.get_text().lower()
+                        if name and not any(w in (name.lower() + txt) for w in ["batal", "deny", "cancel", "tolak"]):
+                            form_data[name] = btn.get("value", "1")
+                            break
+                    self.session.headers.update({"Referer": resp_home.url})
+                    resp_home = self.session.post(action_url, data=form_data, allow_redirects=True, timeout=15)
+                    if "mobile/homemhs" not in resp_home.url:
+                        resp_home = self.session.get("https://teraversa.unsoed.ac.id/mobile/homemhs", timeout=15)
 
-            # 5. Buka Home Teraversa untuk verifikasi dan ambil nama mahasiswa
-            resp_home = self.session.get("https://teraversa.unsoed.ac.id/mobile/homemhs", timeout=15)
             if "mobile/homemhs" in resp_home.url or "homemhs" in resp_home.url:
                 soup_home = BeautifulSoup(resp_home.text, "html.parser")
                 user_detail = soup_home.find("div", class_="user-details")
